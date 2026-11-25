@@ -169,6 +169,16 @@ import SwiftUI
   }
   func reconcile(_ book: Book) {
     problems = [:]
+    // Forget the opt-in after a confirmed loss of access. An unreadable owner is not a revocation.
+    let prefix = book.owner + "/"
+    let retained = Set(book.people.map(\.id)).union(book.unavailablePeople)
+    let obsolete = links.keys.filter {
+      $0.hasPrefix(prefix) && !retained.contains(String($0.dropFirst(prefix.count)))
+    }
+    if !obsolete.isEmpty {
+      for key in obsolete { links.removeValue(forKey: key) }
+      try? save()
+    }
     let linkedPeople = book.people.filter { linked(book.owner + "/" + $0.id) }
     guard !linkedPeople.isEmpty else { return }
     let status = CNContactStore.authorizationStatus(for: .contacts)

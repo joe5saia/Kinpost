@@ -19,7 +19,7 @@ import KinpostCore
         switch command {
         case "help":
           print(
-            "as avery|mira|theo • ls • card • people • access • invite phone|home|personal|household • request [URL] • approve|deny|revoke PERSON:TIER • number NUMBER • view PERSON • quit"
+            "as avery|mira|theo • ls • card • people • access • invite phone|home|personal|household • request [URL] • approve|deny|block|unblock|revoke PERSON:TIER • stop TIER • leave PERSON • delete-card • number NUMBER • view PERSON • quit"
           )
         case "as":
           try exchange.switchTo(arg)
@@ -27,7 +27,7 @@ import KinpostCore
         case "card": try printCard(desk.book.card)
         case "ls":
           print(
-            "\(desk.book.owner): \(desk.book.card.name); people=\(desk.book.people.count) requests=\(desk.book.access.filter(\.pending).count)"
+            "\(desk.book.owner): \(desk.book.card.name); people=\(desk.book.people.count) requests=\(desk.book.access.filter { $0.state == .requested }.count)"
           )
         case "people":
           for p in desk.book.people { print("\(p.id): \(p.card.name) · \(p.audience.title)") }
@@ -38,7 +38,7 @@ import KinpostCore
           try printCard(person.card)
         case "access":
           for a in desk.book.access {
-            print("\(a.key):\(a.audience.rawValue) \(a.pending ? "requested" : "approved")")
+            print("\(a.key):\(a.audience.rawValue) \(a.state.rawValue)")
           }
         case "invite":
           guard let tier = Audience(rawValue: arg) else {
@@ -51,13 +51,24 @@ import KinpostCore
             throw BookError.message("Create an invitation first")
           }
           _ = await desk.request(link)
-        case "approve", "deny", "revoke":
-          guard
+        case "approve", "deny", "block", "unblock", "revoke":
+          guard let decision = AccessDecision(rawValue: command),
             let access = desk.book.access.first(where: {
-              "\($0.key):\($0.audience.rawValue)" == arg && $0.pending == (command != "revoke")
+              "\($0.key):\($0.audience.rawValue)" == arg
             })
           else { throw BookError.message("No matching access entry") }
-          await desk.decide(access, allow: command == "approve")
+          await desk.changeSharing(.respond(access, decision))
+        case "stop":
+          guard let tier = Audience(rawValue: arg), let id = desk.book.shares[tier] else {
+            throw BookError.message("No matching share")
+          }
+          await desk.changeSharing(.stop(tier, shareID: id))
+        case "leave":
+          guard let person = desk.book.people.first(where: { $0.id == arg }) else {
+            throw BookError.message("No matching card")
+          }
+          await desk.changeSharing(.leave(person))
+        case "delete-card": await desk.changeSharing(.deleteCard(revision: desk.book.revision))
         case "number":
           var c = desk.book.card
           c.phones = [Phone("Mobile", arg)]

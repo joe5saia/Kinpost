@@ -116,29 +116,48 @@ public enum BookError: LocalizedError {
 }
 
 public struct Connection: Identifiable, Equatable, Sendable {
-  public let id: String, card: Card, audience: Audience, url: URL
-  public init(id: String, card: Card, audience: Audience, url: URL) {
+  public let id: String, card: Card, audience: Audience, url: URL, shareID: String
+  public init(id: String, card: Card, audience: Audience, url: URL, shareID: String) {
     self.id = id
     self.card = card
     self.audience = audience
     self.url = url
+    self.shareID = shareID
   }
 }
 
+public enum AccessState: String, CaseIterable, Sendable {
+  case requested, invited, accepted, blocked
+}
+
 public struct Access: Identifiable, Equatable, Sendable {
-  public let key: String, name: String, handle: String?, audience: Audience, pending: Bool
-  public var id: String { audience.rawValue + ":" + key }
-  public init(key: String, name: String, handle: String?, audience: Audience, pending: Bool) {
+  public let key: String, name: String, handle: String?, audience: Audience, state: AccessState,
+    shareID: String
+  public var id: String { shareID + ":" + state.rawValue + ":" + key }
+  public init(
+    key: String, name: String, handle: String?, audience: Audience, state: AccessState,
+    shareID: String
+  ) {
     self.key = key
     self.name = name
     self.handle = handle
     self.audience = audience
-    self.pending = pending
+    self.state = state
+    self.shareID = shareID
   }
+}
+
+public enum AccessDecision: String, Sendable { case approve, deny, revoke, block, unblock }
+public enum SharingChange: Sendable {
+  case respond(Access, AccessDecision)
+  case stop(Audience, shareID: String)
+  case leave(Connection)
+  case deleteCard(revision: String)
 }
 
 public struct Book: Sendable {
   public var owner: String, card: Card, revision: String, people: [Connection], access: [Access]
+  public var shares: [Audience: String] = [:]
   /// IDs, not cached card fields: an unreadable share must never authorize a Contacts write.
   public var unavailablePeople: Set<String> = []
   public init(

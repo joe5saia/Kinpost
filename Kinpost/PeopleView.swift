@@ -55,10 +55,12 @@ private struct PersonView: View {
   let session: Session, id: String
   @State private var pick = false
   @State private var options = false
+  @State private var leaving: Connection?
   var body: some View {
     Group {
       if let p = session.desk.book.people.first(where: { $0.id == id }) {
-        let key = session.desk.book.owner + "/" + p.id
+        let owner = session.desk.book.owner
+        let key = owner + "/" + p.id
         ScrollView {
           VStack(alignment: .leading, spacing: 19) {
             Kicker("Received card / \(p.audience.title)").foregroundStyle(.postBlue)
@@ -95,8 +97,22 @@ private struct PersonView: View {
               Label("Forward request link", systemImage: "arrowshape.turn.up.right")
             }
             Text("The owner decides who gets access.").font(.footnote).foregroundStyle(.secondary)
+            Button("Leave this profile", role: .destructive) { leaving = p }
           }.padding(20)
         }.refreshable { await session.refresh() }
+          .confirmationDialog(
+            "Leave this profile?",
+            isPresented: Binding(get: { leaving != nil }, set: { if !$0 { leaving = nil } }),
+            titleVisibility: .visible, presenting: leaving
+          ) { person in
+            Button("Leave \(person.audience.title)", role: .destructive) {
+              Task { await session.changeSharing(.leave(person)) }
+            }
+          } message: { person in
+            Text(
+              "You’ll stop receiving \(person.card.name)’s \(person.audience.title) profile. Other profiles you’ve accepted still work. Contacts copies aren’t deleted."
+            )
+          }
           .confirmationDialog(
             "Link this card to Apple Contacts?", isPresented: $options, titleVisibility: .visible
           ) {
@@ -104,7 +120,7 @@ private struct PersonView: View {
               Task {
                 do {
                   try await session.contacts.authorize()
-                  try session.contacts.sync(p, owner: session.desk.book.owner)
+                  await link(p, owner: owner)
                 } catch { session.desk.problem = error.localizedDescription }
               }
             }
@@ -118,9 +134,7 @@ private struct PersonView: View {
             let selected: (String?) -> Void = { identifier in
               pick = false
               if let identifier {
-                do {
-                  try session.contacts.sync(p, owner: session.desk.book.owner, existing: identifier)
-                } catch { session.desk.problem = error.localizedDescription }
+                Task { await link(p, owner: owner, existing: identifier) }
               }
             }
             if CNContactStore.authorizationStatus(for: .contacts) == .limited {
@@ -138,6 +152,21 @@ private struct PersonView: View {
               : "You no longer have access to this card."))
       }
     }.background(Color.paper).navigationBarTitleDisplayMode(.inline)
+  }
+  private func link(_ shown: Connection, owner: String, existing: String? = nil) async {
+    // The picker or permission prompt can outlive the account or the grant.
+    guard await session.desk.refresh() else { return }
+    guard session.desk.book.owner == owner,
+      let current = session.desk.book.people.first(where: {
+        $0.id == shown.id && $0.shareID == shown.shareID
+      })
+    else {
+      session.desk.problem = "Access changed. Reopen the card before linking it."
+      return
+    }
+    do { try session.contacts.sync(current, owner: owner, existing: existing) } catch {
+      session.desk.problem = error.localizedDescription
+    }
   }
   private func chooseContact() {
     Task {
@@ -202,6 +231,15 @@ private struct PermittedContactPicker: View {
 struct AccessView: View {
   let session: Session
   @State private var decision: Access?
+  @State private var stopping: (tier: Audience, id: String)?
+  private func title(_ state: AccessState) -> String {
+    switch state {
+    case .requested: "Requests"
+    case .invited: "Invited · awaiting acceptance"
+    case .accepted: "Sharing with"
+    case .blocked: "Blocked requests"
+    }
+  }
   var body: some View {
     List {
       Section {
@@ -210,53 +248,105 @@ struct AccessView: View {
           systemImage: "lock.shield"
         ).font(.subheadline).foregroundStyle(.secondary)
       }
-      ForEach([true, false], id: \.self) { pending in
-        Section {
-          let entries = session.desk.book.access.filter { $0.pending == pending }
-          if entries.isEmpty {
-            Text(pending ? "No pending requests" : "No one has access yet").foregroundStyle(
-              .secondary)
+      ForEach(AccessState.allCases, id: \.self) { state in
+        let entries = session.desk.book.access.filter { $0.state == state }
+        if state == .requested || !entries.isEmpty {
+          Section {
+            if entries.isEmpty {
+              Text("No pending requests").foregroundStyle(.secondary)
+            }
+            ForEach(entries) { entry($0) }
+          } header: {
+            Kicker(title(state))
           }
-          ForEach(entries) { a in
-            Button {
-              decision = a
-            } label: {
-              HStack {
-                DetailLine(
-                  icon: a.audience.symbol, label: a.audience.title,
-                  value: [a.name, a.handle ?? (a.pending ? "Account details unavailable" : nil)]
-                    .compactMap { $0 }.joined(separator: "\n"))
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-              }.contentShape(Rectangle())
-            }.buttonStyle(.plain)
-          }
-        } header: {
-          Kicker(pending ? "Requests" : "Shared with")
         }
+      }
+      Section {
+        if session.desk.book.shares.isEmpty {
+          Text("No active sharing links").foregroundStyle(.secondary)
+        }
+        ForEach(Audience.allCases) { tier in
+          if let id = session.desk.book.shares[tier] {
+            Button {
+              stopping = (tier, id)
+            } label: {
+              Label(tier.title, systemImage: tier.symbol)
+            }.accessibilityHint("Manage sharing for this profile")
+              .confirmationDialog(
+                "Stop sharing \(tier.title)?",
+                isPresented: Binding(
+                  get: { stopping?.id == id }, set: { if !$0 { stopping = nil } }),
+                titleVisibility: .visible, presenting: stopping
+              ) { link in
+                Button("Stop sharing with everyone", role: .destructive) {
+                  Task { await session.changeSharing(.stop(link.tier, shareID: link.id)) }
+                }
+              } message: { _ in
+                Text(
+                  "All invitations, requests and grants for this profile end. You keep your card. Other profiles and saved copies aren’t affected. If you share it again, the same link may work for new requests."
+                )
+              }
+          }
+        }
+      } header: {
+        Kicker("Active sharing links")
+      } footer: {
+        Text("Select a profile to stop sharing it with everyone.")
+      }
+      Section {
+        NavigationLink("Privacy and data") { PrivacyView(session: session) }
       }
     }.scrollContentBackground(.hidden).background(Color.paper).navigationTitle("Access").refreshable
     { await session.refresh() }
-    .confirmationDialog(
-      decision.map {
-        [$0.name, $0.handle, $0.audience.title].compactMap { $0 }.joined(separator: " · ")
-      } ?? "Card access",
-      isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } }),
-      titleVisibility: .visible, presenting: decision
-    ) { a in
-      if a.pending {
-        Button("Approve \(a.audience.title.lowercased()) access") {
-          Task { await session.desk.decide(a, allow: true) }
-        }.disabled(a.handle == nil)
+  }
+  private func entry(_ a: Access) -> some View {
+    Button {
+      decision = a
+    } label: {
+      HStack {
+        DetailLine(
+          icon: a.audience.symbol, label: a.audience.title,
+          value: [
+            a.name, a.handle ?? (a.state == .requested ? "Account details unavailable" : nil),
+          ].compactMap { $0 }.joined(separator: "\n"))
+        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+      }.contentShape(Rectangle())
+    }.buttonStyle(.plain)
+      .confirmationDialog(
+        [a.name, a.handle, a.audience.title].compactMap { $0 }.joined(separator: " · "),
+        isPresented: Binding(get: { decision == a }, set: { if !$0 { decision = nil } }),
+        titleVisibility: .visible, presenting: decision
+      ) { a in
+        switch a.state {
+        case .requested:
+          Button("Approve \(a.audience.title.lowercased()) access") {
+            respond(a, .approve)
+          }.disabled(a.handle == nil)
+          Button("Decline request", role: .destructive) { respond(a, .deny) }
+          Button("Block requests for this profile", role: .destructive) { respond(a, .block) }
+        case .accepted, .invited:
+          Button(a.state == .accepted ? "Revoke access" : "Withdraw invitation", role: .destructive)
+          {
+            respond(a, .revoke)
+          }
+        case .blocked:
+          Button("Unblock requests") { respond(a, .unblock) }
+        }
+      } message: { a in
+        switch a.state {
+        case .requested:
+          Text(
+            "If approved, they can accept an invitation to see \(a.audience.detail.lowercased()). Declining lets them ask again; blocking prevents new requests for this profile."
+          )
+        case .invited, .accepted:
+          Text(
+            "Removing this person stops access to this profile only. They can request it again. Other grants and copies already saved in Contacts are not removed."
+          )
+        case .blocked: Text("They can ask again. Unblocking does not give them your card.")
+        }
       }
-      Button(a.pending ? "Decline request" : "Revoke access", role: .destructive) {
-        Task { await session.desk.decide(a, allow: false) }
-      }
-    } message: { a in
-      Text(
-        a.pending
-          ? "This person will receive: \(a.audience.detail.lowercased())."
-          : "This stops updates for this profile. It cannot recall a copy already saved in Contacts."
-      )
-    }
+  }
+  private func respond(_ access: Access, _ decision: AccessDecision) {
+    Task { await session.changeSharing(.respond(access, decision)) }
   }
 }

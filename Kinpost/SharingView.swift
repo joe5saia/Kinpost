@@ -129,7 +129,7 @@ struct RequestView: View {
           Section {
             Label("Invitation processed", systemImage: "checkmark.seal").font(.headline)
             Text(
-              "If you requested access, the owner must approve it. Then open the invitation again or refresh People."
+              "If you requested access, wait for the owner to approve you, then open the link again to accept. Once accepted, the card appears in People."
             ).foregroundStyle(.secondary)
           }
         } else {
@@ -138,11 +138,11 @@ struct RequestView: View {
               .textInputAutocapitalization(.never).autocorrectionDisabled()
           } footer: {
             Text(
-              "The owner sees who is requesting access. Forwarding the link does not grant access to the card. Apple may show account details with the invitation."
+              "If you’ve already been invited, continuing accepts the invitation. Otherwise Apple can show the owner your name and email or phone so they can decide. Forwarding a link does not grant access."
             )
           }
           Section {
-            Button("Request access", systemImage: "paperplane") {
+            Button("Accept or request access", systemImage: "paperplane") {
               guard let url = URL(string: initial.trimmingCharacters(in: .whitespacesAndNewlines))
               else {
                 session.desk.problem = "Enter a valid Kinpost invitation link."

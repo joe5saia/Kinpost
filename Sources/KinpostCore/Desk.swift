@@ -6,7 +6,7 @@ import Observation
   func save(_ card: Card, basedOn revision: String) async throws
   func invitation(_ audience: Audience) async throws -> URL
   func request(_ url: URL) async throws
-  func decide(_ access: Access, allow: Bool) async throws
+  func changeSharing(_ change: SharingChange, owner: String) async throws
 }
 
 /// The iPhone and command-line hosts drive the same actions. SwiftUI owns only presentation and drafts.
@@ -47,6 +47,8 @@ import Observation
         book = try await exchange.read()
         success = true
       } catch {
+        // Without a current snapshot we cannot vouch for the account or its grants.
+        clearSession()
         problem = error.localizedDescription
         success = false
       }
@@ -67,7 +69,9 @@ import Observation
       guard !book.card.name.isEmpty else {
         throw BookError.message("Add your name before sharing a card.")
       }
-      return try await exchange.invitation(audience)
+      let url = try await exchange.invitation(audience)
+      book = try await exchange.read()
+      return url
     }
   }
   public func request(_ url: URL) async -> Bool {
@@ -77,10 +81,16 @@ import Observation
       return true
     } ?? false
   }
-  public func decide(_ access: Access, allow: Bool) async {
-    _ = await perform {
-      try await exchange.decide(access, allow: allow)
-      book = try await exchange.read()
-    }
+  @discardableResult public func changeSharing(_ change: SharingChange) async -> Bool {
+    await perform {
+      try await exchange.changeSharing(change, owner: book.owner)
+      do { book = try await exchange.read() } catch {
+        // The change already succeeded. Never present the pre-revocation card or grant as current.
+        clearSession()
+        throw BookError.message(
+          "Sharing changed, but the latest cards couldn’t be loaded. Refresh to try again.")
+      }
+      return true
+    } ?? false
   }
 }

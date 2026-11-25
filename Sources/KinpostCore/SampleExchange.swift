@@ -10,6 +10,8 @@ import Foundation
     var audience: Audience
     var readers: [String] = []
     var requests: [String] = []
+    var invited: [String]?, blocked: [String]?, stopped: Bool?, instance: UUID?
+    var shareID: String { (instance ?? token).uuidString }
   }
   struct State: Codable {
     var cards: [String: Card]
@@ -20,7 +22,10 @@ import Foundation
   private var state: State
   private let file: URL?
   public var identity: String { state.identity }
-  public func name(_ key: String) -> String { state.cards[key]?.name ?? key }
+  public func name(_ key: String) -> String {
+    guard let name = state.cards[key]?.name, !name.isEmpty else { return key.capitalized }
+    return name
+  }
   public init(file: URL? = nil) throws {
     self.file = file
     if let file, FileManager.default.fileExists(atPath: file.path) {
@@ -71,25 +76,32 @@ import Foundation
   private func url(_ e: Edition) -> URL { URL(string: "kinpost://sample/" + e.token.uuidString)! }
   public func read() async throws -> Book {
     var people: [String: Connection] = [:]
-    var access: [Access] = []
-    for e in state.editions.sorted(by: { $0.audience.index < $1.audience.index }) {
+    var book = Book(
+      owner: identity, card: state.cards[identity]!, revision: state.revisions[identity] ?? "")
+    for e in state.editions.sorted(by: { $0.audience.index < $1.audience.index })
+    where e.stopped != true {
       if e.readers.contains(identity), let card = state.cards[e.owner] {
         people[e.owner] = Connection(
-          id: e.owner, card: card.visible(to: e.audience), audience: e.audience, url: url(e))
+          id: e.owner, card: card.visible(to: e.audience), audience: e.audience, url: url(e),
+          shareID: e.shareID)
       }
       if e.owner == identity {
-        for (ids, pending) in [(e.readers, false), (e.requests, true)] {
-          access += ids.map {
+        book.shares[e.audience] = e.shareID
+        let groups: [(AccessState, [String])] = [
+          (.accepted, e.readers), (.requested, e.requests), (.invited, e.invited ?? []),
+          (.blocked, e.blocked ?? []),
+        ]
+        for (status, ids) in groups {
+          book.access += ids.map {
             Access(
               key: $0, name: name($0), handle: "\($0)@example.com", audience: e.audience,
-              pending: pending)
+              state: status, shareID: e.shareID)
           }
         }
       }
     }
-    return Book(
-      owner: identity, card: state.cards[identity]!, revision: state.revisions[identity] ?? "",
-      people: people.values.sorted(by: { $0.card.name < $1.card.name }), access: access)
+    book.people = people.values.sorted(by: { $0.card.name < $1.card.name })
+    return book
   }
   public func save(_ card: Card, basedOn revision: String) async throws {
     guard revision == state.revisions[identity, default: ""] else {
@@ -101,10 +113,16 @@ import Foundation
     try persist(next)
   }
   public func invitation(_ audience: Audience) async throws -> URL {
-    if let existing = state.editions.first(where: {
+    if let i = state.editions.firstIndex(where: {
       $0.owner == identity && $0.audience == audience
     }) {
-      return url(existing)
+      if state.editions[i].stopped == true {
+        var next = state
+        next.editions[i].stopped = false
+        next.editions[i].instance = UUID()
+        try persist(next)
+      }
+      return url(state.editions[i])
     }
     let e = Edition(owner: identity, audience: audience)
     var next = state
@@ -113,7 +131,8 @@ import Foundation
     return url(e)
   }
   public func request(_ url: URL) async throws {
-    guard let i = state.editions.firstIndex(where: { self.url($0) == url }) else {
+    guard let i = state.editions.firstIndex(where: { self.url($0) == url && $0.stopped != true })
+    else {
       throw BookError.message("That invitation isn’t part of this sample address book.")
     }
     let e = state.editions[i]
@@ -123,20 +142,63 @@ import Foundation
     }
     if e.readers.contains(identity) || e.requests.contains(identity) { return }
     var next = state
-    next.editions[i].requests.append(identity)
+    if e.invited?.contains(identity) == true {
+      next.editions[i].invited?.removeAll { $0 == identity }
+      next.editions[i].readers.append(identity)
+    } else if e.blocked?.contains(identity) != true {
+      next.editions[i].requests.append(identity)
+    }
     try persist(next)
   }
-  public func decide(_ access: Access, allow: Bool) async throws {
-    guard
-      let i = state.editions.firstIndex(where: {
-        $0.owner == identity && $0.audience == access.audience
-      }),
-      (access.pending ? state.editions[i].requests : state.editions[i].readers).contains(access.key)
-    else { throw BookError.message("This request is no longer available.") }
+  public func changeSharing(_ change: SharingChange, owner: String) async throws {
+    let stale = BookError.message("Sharing changed. Refresh before continuing.")
+    guard owner == identity else { throw stale }
     var next = state
-    next.editions[i].requests.removeAll { $0 == access.key }
-    next.editions[i].readers.removeAll { $0 == access.key }
-    if allow { next.editions[i].readers.append(access.key) }
+    switch change {
+    case .respond(let access, let decision):
+      guard
+        let i = next.editions.firstIndex(where: {
+          $0.owner == owner && $0.shareID == access.shareID && $0.stopped != true
+        })
+      else { throw stale }
+      let key = access.key
+      var e = next.editions[i]
+      switch decision {
+      case .approve, .deny, .block:
+        guard access.state == .requested, e.requests.contains(key) else { throw stale }
+        e.requests.removeAll { $0 == key }
+        if decision == .approve { e.invited = (e.invited ?? []) + [key] }
+        if decision == .block { e.blocked = (e.blocked ?? []) + [key] }
+      case .unblock:
+        guard access.state == .blocked, e.blocked?.contains(key) == true else { throw stale }
+        e.blocked?.removeAll { $0 == key }
+      case .revoke:
+        guard e.readers.contains(key) || e.invited?.contains(key) == true else { throw stale }
+        e.readers.removeAll { $0 == key }
+        e.invited?.removeAll { $0 == key }
+      }
+      next.editions[i] = e
+    case .stop(let tier, let id):
+      guard
+        let i = next.editions.firstIndex(where: {
+          $0.owner == owner && $0.audience == tier && $0.shareID == id && $0.stopped != true
+        })
+      else { throw stale }
+      next.editions[i] = Edition(
+        token: next.editions[i].token, owner: owner, audience: tier, stopped: true)
+    case .leave(let person):
+      guard
+        let i = next.editions.firstIndex(where: {
+          $0.owner == person.id && $0.shareID == person.shareID && $0.readers.contains(identity)
+        })
+      else { throw stale }
+      next.editions[i].readers.removeAll { $0 == identity }
+    case .deleteCard(let revision):
+      guard revision == next.revisions[owner, default: ""] else { throw stale }
+      next.editions.removeAll { $0.owner == owner }
+      next.cards[owner] = Card()
+      next.revisions[owner] = ""
+    }
     try persist(next)
   }
 }

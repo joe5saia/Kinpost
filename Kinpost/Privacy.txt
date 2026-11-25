@@ -1,0 +1,14 @@
+Your card and iCloud
+Kinpost uses your Apple Account, not a separate Kinpost account. The card you enter is stored in your private iCloud database. Apple processes it to store and share the profiles you choose. Kinpost has no developer-operated contact database, ads, trackers or analytics. There is no need to give Kinpost access to your address book to share or receive a card.
+
+What other people see
+Each profile contains your name and phone numbers. Home adds your address; Personal adds dates; Household also adds your partner and children. Only add someone else’s details if you have permission to share them. Approved recipients can read the entire chosen profile, including later changes. They can keep copies or forward a request link. Forwarding does not approve the next person.
+
+Requests and Apple Account information
+When you request access, Apple can show the owner your account name and email address or phone number. Kinpost displays CloudKit’s requester and blocked-user information temporarily to manage the share. It does not save that information to Contacts or to an app database. Apple can also show account details in a sharing preview or participant list.
+
+Apple Contacts is optional
+Kinpost never uploads your address book. If you choose to link a card, Kinpost writes selected details to that Apple contact and keeps local link identifiers and a fingerprint to update it. Your Contacts provider may sync its copy to your other devices. Use Stop syncing on the received card, or change Contacts permission in Settings. Neither action deletes the Apple contact.
+
+Retention and deletion
+Your card stays in iCloud until you delete it. In Access, you can withdraw an invitation, revoke one person’s access or stop sharing a profile with everyone. Other profiles have their own grants. Recipients can leave a profile in People. Changes take effect in the app when it connects to iCloud; they cannot recall screenshots, exports or contacts already saved. Delete my card removes your private card, its profiles and their shares from Kinpost in iCloud. It does not delete your Apple Account, cards others share with you or copies in anyone’s Contacts. Delete a saved contact in the Contacts app itself.

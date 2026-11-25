@@ -40,6 +40,9 @@ import SwiftUI
     contacts.reconcile(desk.book)
     return true
   }
+  func changeSharing(_ change: SharingChange) async {
+    if await desk.changeSharing(change) { contacts.reconcile(desk.book) }
+  }
   func changePerson(_ key: String) async {
     guard let sample, !desk.busy else { return }
     do {

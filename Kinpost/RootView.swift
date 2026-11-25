@@ -58,7 +58,7 @@ struct RootView: View {
       }
       Tab("Access", systemImage: "key.horizontal", value: 2) {
         NavigationStack { AccessView(session: session).toolbar { brandToolbar } }
-      }.badge(desk.book.access.filter(\.pending).count)
+      }.badge(desk.book.access.filter { $0.state == .requested }.count)
     }
     .sheet(isPresented: $edit) {
       Editor(desk: desk, card: desk.book.card, revision: desk.book.revision)
