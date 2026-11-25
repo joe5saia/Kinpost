@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Native Linux toolchain for KinpostCore and the headless kinpost executable.
+source /etc/os-release
+case "$ID:$VERSION_ID" in
+  debian:12|debian:13) platform="debian$VERSION_ID" ;;
+  *) echo "Kinpost orb setup requires Debian 12 or 13 (found $PRETTY_NAME)." >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64) ;;
+  aarch64) platform+=-aarch64 ;;
+  *) echo "Unsupported Swift toolchain architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+release=swift-6.4.3-RELEASE
+toolchain="/opt/$release-$platform"
+packages=(binutils gcc libcurl4-openssl-dev libedit-dev libicu-dev libncurses-dev
+          libpython3-dev libsqlite3-dev libxml2-dev pkgconf uuid-dev)
+# In bookworm ld.gold is part of binutils; trixie ships it separately.
+if [[ $VERSION_ID == 13 ]]; then packages+=(binutils-gold libstdc++-14-dev); fi
+missing=()
+for pkg in "${packages[@]}"; do
+  if [[ $(dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null) != installed ]]; then
+    missing+=("$pkg")
+  fi
+done
+if ((${#missing[@]})); then
+  echo "Installing Swift prerequisites: ${missing[*]}"
+  time sudo -n apt-get -qq update
+  time sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+fi
+
+if [[ ! -x $toolchain/usr/bin/swift ]]; then
+  echo "Installing $release for $platform"
+  work=$(mktemp -d)
+  trap 'rm -rf -- "$work"' EXIT
+  archive="$release-$platform.tar.gz"
+  url="https://download.swift.org/${release,,}/$platform/$release/$archive"
+  fetch=(curl --fail --location --silent --show-error --retry 3)
+  time "${fetch[@]}" "$url" -o "$work/$archive"
+  "${fetch[@]}" "$url.sig" -o "$work/release.sig"
+  "${fetch[@]}" --compressed https://www.swift.org/keys/release-key-swift-6.x.asc |
+    gpg --batch --dearmor > "$work/swift-keys.gpg"
+  gpgv --status-fd 1 --keyring "$work/swift-keys.gpg" "$work/release.sig" "$work/$archive" |
+    grep -F '[GNUPG:] VALIDSIG 52BB7E3DE28A71BE22EC05FFEF80A866B47A981F '
+  time tar -xzf "$work/$archive" -C "$work"
+  sudo -n mv -T "$work/$release-$platform" "$toolchain"
+fi
+
+# Amp and terminal sessions start in new login shells, not in this script's shell.
+profile="$HOME/.profile"
+if [[ -f $HOME/.bash_profile ]]; then profile="$HOME/.bash_profile";
+elif [[ -f $HOME/.bash_login ]]; then profile="$HOME/.bash_login"; fi
+path_line="export PATH=\"$toolchain/usr/bin:\$PATH\""
+if ! grep -Fxq "$path_line" "$profile" 2>/dev/null; then
+  printf '\n%s\n' "$path_line" >> "$profile"
+fi
+export PATH="$toolchain/usr/bin:$PATH"
+swift --version
+if [[ -f Package.swift ]]; then
+  echo 'Building the headless CLI'
+  time swift build --product kinpost
+fi
