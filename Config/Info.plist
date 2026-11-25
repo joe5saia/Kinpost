@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CKSharingSupported</key><true/>
+<key>NSContactsUsageDescription</key><string>Keep the cards you choose up to date in Apple Contacts. Kinpost never uploads your address book.</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>Kinpost sample invitation</string><key>CFBundleURLSchemes</key><array><string>kinpost</string></array></dict></array>
+<key>UIBackgroundModes</key><array><string>remote-notification</string></array>
+</dict></plist>
