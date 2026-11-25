@@ -1,11 +1,16 @@
 import Foundation
 import Observation
 
+public enum InvitationOutcome: Sendable {
+  case requested
+  case accepted(owner: String)
+}
+
 @MainActor public protocol Exchange: AnyObject {
   func read() async throws -> Book
   func save(_ card: Card, basedOn revision: String) async throws
   func invitation(_ audience: Audience) async throws -> URL
-  func request(_ url: URL) async throws
+  func request(_ url: URL) async throws -> InvitationOutcome
   func changeSharing(_ change: SharingChange, owner: String) async throws
 }
 
@@ -74,12 +79,12 @@ import Observation
       return url
     }
   }
-  public func request(_ url: URL) async -> Bool {
+  public func request(_ url: URL) async -> InvitationOutcome? {
     await perform {
-      try await exchange.request(url)
+      let outcome = try await exchange.request(url)
       book = try await exchange.read()
-      return true
-    } ?? false
+      return outcome
+    }
   }
   @discardableResult public func changeSharing(_ change: SharingChange) async -> Bool {
     await perform {

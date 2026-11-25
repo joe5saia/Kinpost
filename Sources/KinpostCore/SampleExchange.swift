@@ -130,7 +130,7 @@ import Foundation
     try persist(next)
     return url(e)
   }
-  public func request(_ url: URL) async throws {
+  public func request(_ url: URL) async throws -> InvitationOutcome {
     guard let i = state.editions.firstIndex(where: { self.url($0) == url && $0.stopped != true })
     else {
       throw BookError.message("That invitation isn’t part of this sample address book.")
@@ -140,7 +140,8 @@ import Foundation
       throw BookError.message(
         "This is your invitation. Switch to another sample person to request it.")
     }
-    if e.readers.contains(identity) || e.requests.contains(identity) { return }
+    if e.readers.contains(identity) { return .accepted(owner: e.owner) }
+    if e.requests.contains(identity) { return .requested }
     var next = state
     if e.invited?.contains(identity) == true {
       next.editions[i].invited?.removeAll { $0 == identity }
@@ -149,6 +150,7 @@ import Foundation
       next.editions[i].requests.append(identity)
     }
     try persist(next)
+    return next.editions[i].readers.contains(identity) ? .accepted(owner: e.owner) : .requested
   }
   public func changeSharing(_ change: SharingChange, owner: String) async throws {
     let stale = BookError.message("Sharing changed. Refresh before continuing.")

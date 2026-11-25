@@ -7,6 +7,7 @@ struct SharingView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var tier = Audience.phone
   @State private var invitation: (url: URL, audience: Audience)?
+  @Environment(\.dynamicTypeSize) private var typeSize
   var body: some View {
     NavigationStack {
       ScrollView {
@@ -36,6 +37,9 @@ struct SharingView: View {
             ) { MainButton(title: "Send invitation", icon: "square.and.arrow.up") }.buttonStyle(
               .glassProminent
             ).controlSize(.large)
+            Button("Choose another profile", systemImage: "chevron.backward") {
+              self.invitation = nil
+            }
             if let sample = session.sample {
               VStack(alignment: .leading, spacing: 8) {
                 Kicker("Simulator only").foregroundStyle(.secondary)
@@ -46,7 +50,7 @@ struct SharingView: View {
                     Button(sample.name(id)) {
                       Task {
                         await session.changePerson(id)
-                        session.incoming = link
+                        session.opening = link.absoluteString
                       }
                     }
                   }
@@ -59,20 +63,40 @@ struct SharingView: View {
                 Button {
                   tier = a
                 } label: {
-                  HStack(spacing: 13) {
-                    Image(systemName: a.symbol).frame(width: 38, height: 38).foregroundStyle(
-                      .postBlue
-                    ).background(.postBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
-                    VStack(alignment: .leading, spacing: 4) {
-                      Text(a.title).font(.headline)
-                      Text(a.detail).font(.subheadline).foregroundStyle(.secondary)
+                  let icon = Image(systemName: a.symbol).frame(width: 38, height: 38)
+                    .foregroundStyle(.postBlue)
+                    .background(.postBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
+                  let check = Image(systemName: tier == a ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(tier == a ? Color.postBlue : Color.secondary.opacity(0.5))
+                  let text = VStack(alignment: .leading, spacing: 4) {
+                    Text(a.title).font(.headline)
+                    Text(a.detail).font(.subheadline).foregroundStyle(.secondary)
+                  }
+                  Group {
+                    // Give the description the full row width at accessibility sizes.
+                    if typeSize.isAccessibilitySize {
+                      VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                          icon
+                          Spacer()
+                          check
+                        }
+                        text
+                      }.frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                      HStack(spacing: 13) {
+                        icon
+                        text
+                        Spacer()
+                        check
+                      }
                     }
-                    Spacer()
-                    Image(systemName: tier == a ? "checkmark.circle.fill" : "circle").font(.title3)
-                      .foregroundStyle(tier == a ? Color.postBlue : Color.secondary.opacity(0.5))
                   }.padding(15).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityAddTraits(tier == a ? .isSelected : [])
-                if a != .household { Divider().padding(.leading, 66) }
+                if a != .household {
+                  Divider().padding(.leading, typeSize.isAccessibilitySize ? 15 : 66)
+                }
               }
             }.background(.pageRow, in: RoundedRectangle(cornerRadius: 18)).disabled(
               session.desk.busy)
@@ -120,22 +144,39 @@ private struct QRView: View {
 struct RequestView: View {
   let session: Session
   @State var initial: String
-  @State private var sent = false
+  @State private var outcome: InvitationOutcome?
   @Environment(\.dismiss) private var dismiss
   var body: some View {
     NavigationStack {
       Form {
-        if sent {
+        if let outcome {
           Section {
-            Label("Invitation processed", systemImage: "checkmark.seal").font(.headline)
-            Text(
-              "If you requested access, wait for the owner to approve you, then open the link again to accept. Once accepted, the card appears in People."
-            ).foregroundStyle(.secondary)
+            switch outcome {
+            case .accepted(let owner):
+              if let person = session.desk.book.people.first(where: { $0.id == owner }) {
+                Label("\(person.card.name)’s card is in People", systemImage: "checkmark.seal")
+                  .font(.headline)
+                Text("It stays current as they update it.").foregroundStyle(.secondary)
+              } else {
+                Label("Invitation accepted", systemImage: "checkmark.seal").font(.headline)
+                Text("Refresh People to load the card.").foregroundStyle(.secondary)
+              }
+            case .requested:
+              Label("Request sent", systemImage: "paperplane").font(.headline)
+              Text(
+                "The owner decides whether to approve it. Once they do, open this same link again to accept. The card then appears in People."
+              ).foregroundStyle(.secondary)
+            }
           }
         } else {
           Section {
             TextField("Invitation link", text: $initial, axis: .vertical).keyboardType(.URL)
               .textInputAutocapitalization(.never).autocorrectionDisabled()
+            PasteButton(payloadType: String.self) { strings in
+              if let link = strings.first {
+                initial = link.trimmingCharacters(in: .whitespacesAndNewlines)
+              }
+            }
           } footer: {
             Text(
               "If you’ve already been invited, continuing accepts the invitation. Otherwise Apple can show the owner your name and email or phone so they can decide. Forwarding a link does not grant access."
@@ -148,12 +189,16 @@ struct RequestView: View {
                 session.desk.problem = "Enter a valid Kinpost invitation link."
                 return
               }
-              Task { sent = await session.desk.request(url) }
+              Task { outcome = await session.desk.request(url) }
             }.disabled(initial.isEmpty || session.desk.busy)
           }
         }
       }.navigationTitle("Open invitation").navigationBarTitleDisplayMode(.inline).toolbar {
-        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        if outcome == nil {
+          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+        } else {
+          ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        }
       }
     }.presentationDetents([.medium, .large]).deskErrors(session.desk)
   }

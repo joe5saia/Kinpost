@@ -43,8 +43,11 @@ struct RootView: View {
                 HStack {
                   Text("Card details").font(.title2.bold())
                   Spacer()
-                  Button("Edit") { edit = true }.font(.subheadline.weight(.semibold)).disabled(
-                    desk.book.owner.isEmpty)
+                  Button {
+                    edit = true
+                  } label: {
+                    Text("Edit").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                  }.font(.subheadline.weight(.semibold)).disabled(desk.book.owner.isEmpty)
                 }.padding(.top, 5)
                 CardDetails(card: desk.book.card)
               }
@@ -93,9 +96,10 @@ struct RootView: View {
     }
     .sheet(
       isPresented: Binding(
-        get: { session.incoming != nil }, set: { if !$0 { session.incoming = nil } })
-    ) { RequestView(session: session, initial: session.incoming?.absoluteString ?? "") }
-    .deskErrors(desk)
+        get: { session.opening != nil }, set: { if !$0 { session.opening = nil } })
+    ) { RequestView(session: session, initial: session.opening ?? "") }
+    // Each sheet shows its own errors; a second alert here would tear down the sheet and its input.
+    .deskErrors(desk, when: !edit && !share && !choosePerson && session.opening == nil)
   }
   @ToolbarContentBuilder private var brandToolbar: some ToolbarContent {
     ToolbarItem(placement: .principal) {
@@ -115,6 +119,7 @@ struct RootView: View {
 
 struct CardDetails: View {
   var card: Card
+  @Environment(\.dynamicTypeSize) private var typeSize
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       if card.phones.isEmpty && card.address.isEmpty && card.birthday == nil
@@ -145,7 +150,7 @@ struct CardDetails: View {
     VStack(spacing: 0) {
       DetailLine(icon: symbol, label: title, value: value).padding(.horizontal, 14).padding(
         .vertical, 7)
-      Divider().padding(.leading, 66)
+      Divider().padding(.leading, typeSize.isAccessibilitySize ? 14 : 66)
     }
   }
   private func member(_ member: HouseholdMember, _ relationship: String) -> some View {
@@ -157,10 +162,11 @@ struct CardDetails: View {
 }
 
 extension View {
-  func deskErrors(_ desk: Desk) -> some View {
+  func deskErrors(_ desk: Desk, when active: Bool = true) -> some View {
     alert(
       "Kinpost",
-      isPresented: Binding(get: { desk.problem != nil }, set: { if !$0 { desk.problem = nil } })
+      isPresented: Binding(
+        get: { active && desk.problem != nil }, set: { if !$0 { desk.problem = nil } })
     ) {
       Button("OK") { desk.problem = nil }
     } message: {

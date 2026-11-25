@@ -4,10 +4,9 @@ import SwiftUI
 
 struct PeopleView: View {
   let session: Session
-  @State private var request = false
   var body: some View {
     List {
-      Section { Button("Open invitation", systemImage: "link") { request = true } }
+      Section { Button("Open invitation", systemImage: "link") { session.opening = "" } }
       Section {
         if session.desk.book.people.isEmpty && session.desk.book.unavailablePeople.isEmpty {
           ContentUnavailableView(
@@ -47,7 +46,6 @@ struct PeopleView: View {
     }.scrollContentBackground(.hidden).background(Color.paper).navigationTitle("People").refreshable
     { await session.refresh() }
     .navigationDestination(for: String.self) { id in PersonView(session: session, id: id) }
-    .sheet(isPresented: $request) { RequestView(session: session, initial: "") }
   }
 }
 
@@ -56,6 +54,7 @@ private struct PersonView: View {
   @State private var pick = false
   @State private var options = false
   @State private var leaving: Connection?
+  @State private var stopping = false
   var body: some View {
     Group {
       if let p = session.desk.book.people.first(where: { $0.id == id }) {
@@ -81,11 +80,21 @@ private struct PersonView: View {
                 ).font(.subheadline).foregroundStyle(.secondary)
               }
               if session.contacts.linked(key) {
-                Button("Stop syncing", role: .destructive) {
-                  do { try session.contacts.unlink(key) } catch {
-                    session.desk.problem = error.localizedDescription
+                Button("Stop syncing", role: .destructive) { stopping = true }
+                  .confirmationDialog(
+                    "Stop updating this contact?", isPresented: $stopping,
+                    titleVisibility: .visible
+                  ) {
+                    Button("Stop Syncing", role: .destructive) {
+                      do { try session.contacts.unlink(key) } catch {
+                        session.desk.problem = error.localizedDescription
+                      }
+                    }
+                  } message: {
+                    Text(
+                      "The contact stays in Apple Contacts but won’t get \(p.card.name)’s changes. To resume later, choose this existing contact so you don’t get a duplicate."
+                    )
                   }
-                }
               } else {
                 Button("Link to Contacts", systemImage: "person.crop.circle.badge.plus") {
                   options = true

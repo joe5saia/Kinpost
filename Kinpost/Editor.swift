@@ -3,9 +3,17 @@ import SwiftUI
 
 struct Editor: View {
   let desk: Desk
+  @State private var original: Card
   @State var card: Card
   @State var revision: String
+  @State private var confirmingDiscard = false
   @Environment(\.dismiss) private var dismiss
+  init(desk: Desk, card: Card, revision: String) {
+    self.desk = desk
+    _original = State(initialValue: card)
+    _card = State(initialValue: card)
+    _revision = State(initialValue: revision)
+  }
   var body: some View {
     NavigationStack {
       Form {
@@ -15,18 +23,7 @@ struct Editor: View {
         }
         Section("Phone numbers") {
           ForEach($card.phones) { $phone in
-            HStack {
-              Picker("Label", selection: $phone.label) {
-                ForEach(["Mobile", "Home", "Work", "Other"], id: \.self) { Text($0) }
-              }.labelsHidden().fixedSize()
-              TextField("Number", text: $phone.number).keyboardType(.phonePad).textContentType(
-                .telephoneNumber)
-              Button(role: .destructive) {
-                card.phones.removeAll { $0.id == phone.id }
-              } label: {
-                Image(systemName: "minus.circle")
-              }.buttonStyle(.borderless).accessibilityLabel("Remove \(phone.label) number")
-            }
+            PhoneRow(phone: $phone) { card.phones.removeAll { $0.id == phone.id } }
           }
           Button("Add number", systemImage: "plus") { card.phones.append(Phone()) }
         }
@@ -70,13 +67,52 @@ struct Editor: View {
       }.scrollDismissesKeyboard(.interactively).navigationTitle("Edit card")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+          ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel") { if card == original { dismiss() } else { confirmingDiscard = true } }
+              .disabled(desk.busy)
+              .confirmationDialog("Discard your changes?", isPresented: $confirmingDiscard) {
+                Button("Discard Changes", role: .destructive) { dismiss() }
+                Button("Keep Editing", role: .cancel) {}
+              }
+          }
           ToolbarItem(placement: .confirmationAction) {
             Button("Save") { Task { if await desk.save(card, basedOn: revision) { dismiss() } } }
               .disabled(desk.busy || card.name.trimmingCharacters(in: .whitespaces).isEmpty)
           }
         }
-    }.interactiveDismissDisabled(desk.busy).deskErrors(desk)
+    }.interactiveDismissDisabled(desk.busy || card != original).deskErrors(desk)
+  }
+}
+private struct PhoneRow: View {
+  @Binding var phone: Phone
+  let remove: () -> Void
+  @Environment(\.dynamicTypeSize) private var typeSize
+  var body: some View {
+    let label = Picker("Label", selection: $phone.label) {
+      ForEach(["Mobile", "Home", "Work", "Other"], id: \.self) { Text($0) }
+    }.labelsHidden().fixedSize()
+    let number = TextField("Number", text: $phone.number).keyboardType(.phonePad)
+      .textContentType(.telephoneNumber)
+    let removeButton = Button(role: .destructive, action: remove) {
+      Image(systemName: "minus.circle")
+    }.buttonStyle(.borderless).accessibilityLabel("Remove \(phone.label) number")
+    // At accessibility sizes the number gets its own line instead of truncating.
+    if typeSize.isAccessibilitySize {
+      VStack(alignment: .leading) {
+        HStack {
+          label
+          Spacer()
+          removeButton
+        }
+        number
+      }
+    } else {
+      HStack {
+        label
+        number
+        removeButton
+      }
+    }
   }
 }
 private struct MemberFields: View {

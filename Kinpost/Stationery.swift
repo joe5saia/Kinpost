@@ -126,8 +126,14 @@ struct CallingCard: View {
 extension String { var nonempty: String? { isEmpty ? nil : self } }
 struct DetailLine: View {
   var icon: String, label: String, value: String
+  @Environment(\.dynamicTypeSize) private var typeSize
   var body: some View {
-    HStack(spacing: 13) {
+    // Stack the icon above the text at accessibility sizes so values keep the full width.
+    let layout =
+      typeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+      : AnyLayout(HStackLayout(spacing: 13))
+    layout {
       Image(systemName: icon).font(.system(size: 17, weight: .medium)).foregroundStyle(.postBlue)
         .frame(width: 38, height: 38).background(
           .postBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
@@ -135,8 +141,8 @@ struct DetailLine: View {
         Text(label).font(.caption).foregroundStyle(.secondary)
         Text(value).font(.body).foregroundStyle(.primary)
       }
-      Spacer(minLength: 2)
-    }.padding(.vertical, 3).accessibilityElement(children: .combine)
+    }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3)
+      .accessibilityElement(children: .combine)
   }
 }
 struct MainButton: View {

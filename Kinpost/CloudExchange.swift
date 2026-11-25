@@ -198,7 +198,7 @@ import KinpostCore
     }
     return url
   }
-  func request(_ url: URL) async throws {
+  func request(_ url: URL) async throws -> InvitationOutcome {
     try await verifyAccount()
     guard url.scheme == "https",
       ["www.icloud.com", "icloud.com"].contains(url.host?.lowercased() ?? ""),
@@ -219,7 +219,7 @@ import KinpostCore
       }
       if [.pending, .accepted].contains(metadata.participantStatus) {
         try await accept(metadata)
-        return
+        return .accepted(owner: metadata.share.recordID.zoneID.ownerName)
       }
     }
     do {
@@ -228,6 +228,7 @@ import KinpostCore
         throw BookError.message("iCloud did not confirm processing this request.")
       }
       try result.get()
+      return .requested
     } catch let error as CKError where error.code == .participantAlreadyInvited {
       throw BookError.message(
         "You’ve already been invited. Open the original iCloud link to accept.")

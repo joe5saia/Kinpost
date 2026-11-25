@@ -6,7 +6,8 @@ import SwiftUI
   static let shared = Session()
   let desk: Desk, sample: SampleExchange?, cloud: CloudExchange?
   let contacts = AddressBook()
-  var incoming: URL?
+  /// The invitation link shown in the Open invitation sheet; "" opens it empty.
+  var opening: String?
   var identityToken = UUID()
   private init() {
     #if targetEnvironment(simulator)
@@ -113,7 +114,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     WindowGroup {
       RootView(session: session).id(session.identityToken).tint(.postBlue)
         .onOpenURL { url in
-          if session.sample != nil && url.scheme == "kinpost" { session.incoming = url }
+          if session.sample != nil && url.scheme == "kinpost" {
+            session.opening = url.absoluteString
+          }
         }
         .onReceive(NotificationCenter.default.publisher(for: .CKAccountChanged)) { _ in
           guard session.cloud != nil else { return }
