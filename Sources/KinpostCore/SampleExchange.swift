@@ -80,7 +80,9 @@ import Foundation
       if e.owner == identity {
         for (ids, pending) in [(e.readers, false), (e.requests, true)] {
           access += ids.map {
-            Access(key: $0, name: name($0), audience: e.audience, pending: pending)
+            Access(
+              key: $0, name: name($0), handle: "\($0)@example.com", audience: e.audience,
+              pending: pending)
           }
         }
       }

@@ -6,22 +6,24 @@ struct SharingView: View {
   let session: Session
   @Environment(\.dismiss) private var dismiss
   @State private var tier = Audience.phone
-  @State private var link: URL?
+  @State private var invitation: (url: URL, audience: Audience)?
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
-          Kicker(link == nil ? "01 / Sharing profile" : "02 / Invitation").foregroundStyle(
+          Kicker(invitation == nil ? "01 / Sharing profile" : "02 / Invitation").foregroundStyle(
             .postBlue)
           VStack(alignment: .leading, spacing: 8) {
-            Text(link == nil ? "What goes with it?" : "Ready to share.").font(.largeTitle.bold())
+            Text(invitation == nil ? "What goes with it?" : "Ready to share.").font(
+              .largeTitle.bold())
             Text(
-              link == nil
+              invitation == nil
                 ? "Choose which details this person can see, now and when your card changes."
                 : "Send the invitation or let someone scan it with their iPhone camera."
             ).foregroundStyle(.secondary)
           }
-          if let link {
+          if let invitation {
+            let (link, tier) = invitation
             VStack(spacing: 12) {
               QRView(url: link)
               Text(tier.title).font(.system(.title2, design: .serif, weight: .semibold))
@@ -72,13 +74,16 @@ struct SharingView: View {
                 }.buttonStyle(.plain).accessibilityAddTraits(tier == a ? .isSelected : [])
                 if a != .household { Divider().padding(.leading, 66) }
               }
-            }.background(.pageRow, in: RoundedRectangle(cornerRadius: 18))
+            }.background(.pageRow, in: RoundedRectangle(cornerRadius: 18)).disabled(
+              session.desk.busy)
             Label(
-              "Even with the link, nobody sees your details until you approve them.",
+              "You approve who can read this card. Apple may show account details in the invitation or participant list.",
               systemImage: "lock"
             ).font(.footnote).foregroundStyle(.secondary)
             Button {
-              Task { link = await session.desk.invitation(tier) }
+              Task { [tier] in
+                if let url = await session.desk.invitation(tier) { invitation = (url, tier) }
+              }
             } label: {
               MainButton(
                 title: session.desk.busy ? "Preparing…" : "Create invitation", icon: "link")
@@ -133,13 +138,16 @@ struct RequestView: View {
               .textInputAutocapitalization(.never).autocorrectionDisabled()
           } footer: {
             Text(
-              "Your identity is shared with the card owner when you request access. Forwarding a link does not forward any contact information."
+              "The owner sees who is requesting access. Forwarding the link does not grant access to the card. Apple may show account details with the invitation."
             )
           }
           Section {
             Button("Request access", systemImage: "paperplane") {
               guard let url = URL(string: initial.trimmingCharacters(in: .whitespacesAndNewlines))
-              else { session.desk.problem = "Enter a valid Kinpost invitation link."; return }
+              else {
+                session.desk.problem = "Enter a valid Kinpost invitation link."
+                return
+              }
               Task { sent = await session.desk.request(url) }
             }.disabled(initial.isEmpty || session.desk.busy)
           }

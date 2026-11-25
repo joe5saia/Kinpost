@@ -7,8 +7,10 @@ import SwiftUI
 @MainActor @Observable final class AddressBook {
   private struct Link: Codable {
     var contact = "", created = false, owned: [String] = [], digest = ""
+    var needsRelink: Bool?
   }
   private var links: [String: Link]
+  private(set) var problems: [String: String] = [:]
   private let store = CNContactStore()
   private let key = "kinpost.contact-links.v1"
   init() {
@@ -23,22 +25,43 @@ import SwiftUI
   func linked(_ id: String) -> Bool { links[id] != nil }
   func unlink(_ id: String) throws {
     links.removeValue(forKey: id)
+    problems[id] = nil
     try save()
   }
   func authorize() async throws {
+    let status = CNContactStore.authorizationStatus(for: .contacts)
+    if status == .limited || status == .authorized { return }
     guard try await store.requestAccess(for: .contacts) else {
       throw BookError.message(
         "Allow Contacts access in Settings, or keep this card in Kinpost only.")
     }
   }
+  private func canonicalIDs() -> [String: String] {
+    var result: [String: String] = [:]
+    for identifier in Set(links.values.map(\.contact)) {
+      result[identifier] = try? store.unifiedContact(
+        withIdentifier: identifier,
+        keysToFetch: [CNContactIdentifierKey as CNKeyDescriptor]
+      ).identifier
+    }
+    return result
+  }
   func sync(_ person: Connection, owner: String, existing: String? = nil) throws {
+    try sync(person, owner: owner, existing: existing, canonical: canonicalIDs())
+  }
+  private func sync(
+    _ person: Connection, owner: String, existing: String?, canonical: [String: String]
+  ) throws {
     let id = owner + "/" + person.id
     var link = links[id] ?? Link()
+    if existing == nil, link.needsRelink == true {
+      throw BookError.message(
+        "Two cards were linked to the same Apple contact. Choose a contact to resume sync.")
+    }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let c = person.card
     let digest = Data(SHA256.hash(data: try encoder.encode(c))).base64EncodedString()
-    guard link.digest != digest else { return }
     let keys =
       [
         CNContactGivenNameKey, CNContactFamilyNameKey, CNContactPhoneNumbersKey,
@@ -48,12 +71,33 @@ import SwiftUI
     let request = CNSaveRequest()
     let targetID = existing ?? (link.contact.isEmpty ? nil : link.contact)
     if let targetID {
-      guard !links.contains(where: { $0.key != id && $0.value.contact == targetID }) else {
-        throw BookError.message("Another card is already linked to this contact.")
+      let resolved = try store.unifiedContact(withIdentifier: targetID, keysToFetch: keys)
+      let conflicts = links.filter { key, other in
+        key != id
+          && (other.contact == resolved.identifier
+            || canonical[other.contact] == resolved.identifier
+            || resolved.isUnifiedWithContact(withIdentifier: other.contact))
       }
-      target =
-        try store.unifiedContact(withIdentifier: targetID, keysToFetch: keys).mutableCopy()
-        as! CNMutableContact
+      if !conflicts.isEmpty {
+        let message =
+          "Another card links to this Apple contact. Choose a different contact or stop syncing."
+        if existing == nil {
+          for key in Array(conflicts.keys) + [id] {
+            links[key]?.needsRelink = true
+            problems[key] = message
+          }
+          try save()
+        }
+        throw BookError.message(message)
+      }
+      if existing != nil {
+        if canonical[link.contact] != resolved.identifier { link = Link() }
+        link.created = false
+        link.needsRelink = nil
+      } else if link.digest == digest {
+        return
+      }
+      target = resolved.mutableCopy() as! CNMutableContact
     } else {
       target = CNMutableContact()
       link.created = true
@@ -117,15 +161,51 @@ import SwiftUI
       request.update(target)
     }
     try store.execute(request)
-    link.contact = target.identifier
+    link.contact = targetID ?? target.identifier
     link.digest = digest
     links[id] = link
     try save()
+    problems[id] = nil
   }
-  func reconcile(_ book: Book) throws {
-    for person in book.people where linked(book.owner + "/" + person.id) {
-      try sync(person, owner: book.owner)
+  func reconcile(_ book: Book) {
+    problems = [:]
+    let linkedPeople = book.people.filter { linked(book.owner + "/" + $0.id) }
+    guard !linkedPeople.isEmpty else { return }
+    let status = CNContactStore.authorizationStatus(for: .contacts)
+    guard status == .authorized || status == .limited else {
+      for person in linkedPeople {
+        problems[book.owner + "/" + person.id] = "Contacts access is off."
+      }
+      return
     }
+    let canonical = canonicalIDs()
+    for person in linkedPeople {
+      do { try sync(person, owner: book.owner, existing: nil, canonical: canonical) } catch let
+        error as CNError
+        where error.code == .recordDoesNotExist || error.code == .authorizationDenied
+      {
+        problems[book.owner + "/" + person.id] =
+          "The linked contact was deleted or is no longer accessible to Kinpost."
+      } catch { problems[book.owner + "/" + person.id] = error.localizedDescription }
+    }
+  }
+  typealias ContactChoice = (id: String, name: String, phone: String?)
+  @concurrent static func permittedContacts() async throws -> [ContactChoice] {
+    let request = CNContactFetchRequest(keysToFetch: [
+      CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+      CNContactPhoneNumbersKey as CNKeyDescriptor,
+    ])
+    request.sortOrder = .userDefault
+    var contacts: [ContactChoice] = []
+    try CNContactStore().enumerateContacts(with: request) { contact, _ in
+      contacts.append(
+        (
+          contact.identifier,
+          CNContactFormatter.string(from: contact, style: .fullName) ?? "Unnamed contact",
+          contact.phoneNumbers.first?.value.stringValue
+        ))
+    }
+    return contacts
   }
 }
 

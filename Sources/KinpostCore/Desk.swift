@@ -15,22 +15,44 @@ import Observation
   public private(set) var busy = false
   public var problem: String?
   private let exchange: any Exchange
+  @ObservationIgnored private var refreshWaiters: [CheckedContinuation<Bool, Never>] = []
   public init(_ exchange: any Exchange) { self.exchange = exchange }
 
   private func perform<T>(_ work: () async throws -> T) async -> T? {
     guard !busy else { return nil }
     busy = true
-    defer { busy = false }
-    do { return try await work() } catch {
+    let result: T?
+    do { result = try await work() } catch {
       problem = error.localizedDescription
-      return nil
+      result = nil
     }
+    await finishRefreshing()
+    return result
   }
   @discardableResult public func refresh() async -> Bool {
-    await perform {
-      book = try await exchange.read()
-      return true
-    } ?? false
+    await withCheckedContinuation { continuation in
+      refreshWaiters.append(continuation)
+      if !busy {
+        busy = true
+        Task { await finishRefreshing() }
+      }
+    }
+  }
+  private func finishRefreshing() async {
+    while !refreshWaiters.isEmpty {
+      let batch = refreshWaiters
+      refreshWaiters.removeAll()
+      let success: Bool
+      do {
+        book = try await exchange.read()
+        success = true
+      } catch {
+        problem = error.localizedDescription
+        success = false
+      }
+      for waiter in batch { waiter.resume(returning: success) }
+    }
+    busy = false
   }
   public func clearSession() { book = Book() }
   public func save(_ card: Card, basedOn revision: String) async -> Bool {

@@ -37,13 +37,8 @@ import SwiftUI
   }
   @discardableResult func refresh() async -> Bool {
     guard await desk.refresh() else { return false }
-    do {
-      try contacts.reconcile(desk.book)
-      return true
-    } catch {
-      desk.problem = error.localizedDescription
-      return false
-    }
+    contacts.reconcile(desk.book)
+    return true
   }
   func changePerson(_ key: String) async {
     guard let sample, !desk.busy else { return }

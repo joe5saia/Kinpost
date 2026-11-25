@@ -126,11 +126,12 @@ public struct Connection: Identifiable, Equatable, Sendable {
 }
 
 public struct Access: Identifiable, Equatable, Sendable {
-  public let key: String, name: String, audience: Audience, pending: Bool
+  public let key: String, name: String, handle: String?, audience: Audience, pending: Bool
   public var id: String { audience.rawValue + ":" + key }
-  public init(key: String, name: String, audience: Audience, pending: Bool) {
+  public init(key: String, name: String, handle: String?, audience: Audience, pending: Bool) {
     self.key = key
     self.name = name
+    self.handle = handle
     self.audience = audience
     self.pending = pending
   }
@@ -138,6 +139,8 @@ public struct Access: Identifiable, Equatable, Sendable {
 
 public struct Book: Sendable {
   public var owner: String, card: Card, revision: String, people: [Connection], access: [Access]
+  /// IDs, not cached card fields: an unreadable share must never authorize a Contacts write.
+  public var unavailablePeople: Set<String> = []
   public init(
     owner: String = "", card: Card = Card(), revision: String = "", people: [Connection] = [],
     access: [Access] = []

@@ -4,5 +4,5 @@
 <key>CKSharingSupported</key><true/>
 <key>NSContactsUsageDescription</key><string>Keep the cards you choose up to date in Apple Contacts. Kinpost never uploads your address book.</string>
 <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>Kinpost sample invitation</string><key>CFBundleURLSchemes</key><array><string>kinpost</string></array></dict></array>
-<key>UIBackgroundModes</key><array><string>remote-notification</string></array>
+<key>UIBackgroundModes</key><array><string>fetch</string><string>remote-notification</string></array>
 </dict></plist>

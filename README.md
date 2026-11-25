@@ -27,7 +27,7 @@ Missing fields stay empty. If two profiles are approved for the same owner and r
 
 ## Drive the same behavior without an iPhone
 
-On a Mac with Swift 6 or later, run `swift run kinpost`. Type `help` for the commands. No simulator, Contacts permission, Apple account or network is needed. Example session:
+On a Mac with Swift 6 or later, run `swift run kinpost`. In a Linux orb after `.agents/setup`, use `bash -lc 'swift run kinpost'` (the login shell loads the installed toolchain), or run `.build/debug/kinpost` directly. Type `help` for the commands. No simulator, Contacts permission, Apple account or network is needed to run the sample. Example session:
 
 ```text
 invite phone
@@ -57,7 +57,7 @@ The split follows the Core/Mobile/CLI principle in [Shopify’s Reflex guide](ht
 
 The iCloud implementation is separate from the sample transport. It requires an Apple Developer team, a provisioned iCloud container, and two different iCloud accounts. Nothing here registers a developer identifier, provisions a container, deploys a schema or publishes a build automatically.
 
-1. In Xcode, select your signing team and a unique bundle identifier. Enable **iCloud → CloudKit**, select or create `iCloud.<your bundle identifier>`, and enable **Push Notifications** and **Background Modes → Remote notifications**. The app derives the container identifier from its bundle identifier. Keep both devices on the same container and CloudKit environment.
+1. In Xcode, select your signing team and a unique bundle identifier. Enable **iCloud → CloudKit**, select or create `iCloud.<your bundle identifier>`, and enable **Push Notifications** and both **Background Modes → Background fetch** and **Remote notifications**. The app derives the container identifier from its bundle identifier. Keep both devices on the same container and CloudKit environment.
 2. Run development-signed builds on two signed-in iPhones with iCloud Drive enabled. A properly entitled, signed-in simulator can opt into the same path using the **`-iCloud`** launch argument. Do not use that flag with an unsigned simulator build.
 3. Save a card as A, generate a Phone only invitation, and send the iCloud link to B. On B open it (or paste it into **People → Open invitation**) and request access. On A refresh **Access**, approve B and have B reopen the original link if Apple prompts them to accept. Check that B sees no address or household information. Repeat with a forwarded link and an unapproved third account.
 4. On B opt in to Contacts. Change A’s number, remove a number, and move the address. Check B with the app foregrounded, backgrounded, and after a cold launch. Silent pushes are best effort: reopening or pulling to refresh fetches current data. An offline device cannot receive a change immediately. This version requires connectivity to save a live card; it does not queue offline edits.
@@ -66,6 +66,6 @@ The iCloud implementation is separate from the sample transport. It requires an 
 ## Privacy and storage boundaries
 
 - The authoritative card is an unshared `PrivateCard` in the owner’s private CloudKit zone. Saving updates it and four separate `Edition` records atomically, using a record change tag to reject stale edits. The published payload is rebuilt from an allowlist; private fields are not merely hidden in SwiftUI. Card payloads use CloudKit encrypted record fields.
-- One private `CKShare` per used edition has `publicPermission = .none` and `allowsAccessRequests = true`. The QR and message contain a link, not a vCard or family data. An owner adds approved requesters as read-only participants. Apple manages participant identities, share limits and invitation acceptance. See [Apple’s access request documentation](https://developer.apple.com/documentation/cloudkit/ckshare/requesters).
+- One private `CKShare` per used edition has `publicPermission = .none` and `allowsAccessRequests = true`. The QR and message contain a link, not a vCard or family data. The owner checks the requester’s email or phone before granting read-only access. This protects the card fields; Apple may show account information in previews or participant lists. Use a third account to inspect a forwarded link before approval and check participant visibility after approval. See [Apple’s access request documentation](https://developer.apple.com/documentation/cloudkit/ckshare/requesters).
 - Kinpost never imports or uploads the address book. Permissions are requested only when the recipient chooses to link a card. Refreshes update that specific record, not a contact guessed from its name. A new contact follows the shared name and birthday. For an existing contact, Kinpost preserves its name and birthday, manages the numbers and addresses it adds or matches, and leaves unrelated fields alone. Anniversary and relationship names can be mirrored; individual family members’ phone numbers and birthdays stay in Kinpost.
 - Contact links are local to the receiving device and account. Stopping sync disconnects the link; it does not erase someone’s address book. The simulator exercises the real Contacts framework, but only its local sample exchange stands in for iCloud.

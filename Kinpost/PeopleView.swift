@@ -1,3 +1,4 @@
+import ContactsUI
 import KinpostCore
 import SwiftUI
 
@@ -8,7 +9,7 @@ struct PeopleView: View {
     List {
       Section { Button("Open invitation", systemImage: "link") { request = true } }
       Section {
-        if session.desk.book.people.isEmpty {
+        if session.desk.book.people.isEmpty && session.desk.book.unavailablePeople.isEmpty {
           ContentUnavailableView(
             "No cards yet", systemImage: "tray",
             description: Text("Open a friend’s invitation to request their card."))
@@ -21,9 +22,21 @@ struct PeopleView: View {
               ).frame(width: 43, height: 43).background(.postBlue.opacity(0.09), in: Circle())
               VStack(alignment: .leading, spacing: 3) {
                 Text(p.card.name).font(.headline)
-                Text(p.audience.title).font(.subheadline).foregroundStyle(.secondary)
+                if session.contacts.problems[session.desk.book.owner + "/" + p.id] != nil {
+                  Label("Contacts sync paused", systemImage: "exclamationmark.circle").font(
+                    .subheadline)
+                } else {
+                  Text(p.audience.title).font(.subheadline).foregroundStyle(.secondary)
+                }
               }
             }.padding(.vertical, 3)
+          }
+        }
+        ForEach(session.desk.book.unavailablePeople.sorted(), id: \.self) { id in
+          VStack(alignment: .leading, spacing: 4) {
+            Label("Shared card unavailable (…\(id.suffix(6)))", systemImage: "icloud.slash")
+            Text("Pull to refresh. No Contacts update was applied.").font(.footnote)
+              .foregroundStyle(.secondary)
           }
         }
       } header: {
@@ -53,11 +66,18 @@ private struct PersonView: View {
             CardDetails(card: p.card)
             VStack(alignment: .leading, spacing: 12) {
               Text("Apple Contacts").font(.headline)
-              Text(
-                session.contacts.linked(key)
-                  ? "Linked on this iPhone. New details are applied when Kinpost refreshes."
-                  : "Create a contact or choose an existing one. Other numbers and addresses stay intact."
-              ).font(.subheadline).foregroundStyle(.secondary)
+              if let problem = session.contacts.problems[key] {
+                Label("Sync paused", systemImage: "exclamationmark.circle").font(
+                  .subheadline.bold())
+                Text(problem).font(.subheadline).foregroundStyle(.secondary)
+                Button("Choose a contact to relink") { chooseContact() }.buttonStyle(.bordered)
+              } else {
+                Text(
+                  session.contacts.linked(key)
+                    ? "Linked on this iPhone. New details are applied when Kinpost refreshes."
+                    : "Create a contact or choose an existing one. Other numbers and addresses stay intact."
+                ).font(.subheadline).foregroundStyle(.secondary)
+              }
               if session.contacts.linked(key) {
                 Button("Stop syncing", role: .destructive) {
                   do { try session.contacts.unlink(key) } catch {
@@ -88,21 +108,14 @@ private struct PersonView: View {
                 } catch { session.desk.problem = error.localizedDescription }
               }
             }
-            Button("Choose existing contact") {
-              Task {
-                do {
-                  try await session.contacts.authorize()
-                  pick = true
-                } catch { session.desk.problem = error.localizedDescription }
-              }
-            }
+            Button("Choose existing contact") { chooseContact() }
           } message: {
             Text(
               "Kinpost will update numbers and addresses it adds or matches. Other entries stay yours. Revoking access won’t erase the saved copy."
             )
           }
           .sheet(isPresented: $pick) {
-            ContactPicker { identifier in
+            let selected: (String?) -> Void = { identifier in
               pick = false
               if let identifier {
                 do {
@@ -110,13 +123,79 @@ private struct PersonView: View {
                 } catch { session.desk.problem = error.localizedDescription }
               }
             }
+            if CNContactStore.authorizationStatus(for: .contacts) == .limited {
+              PermittedContactPicker(selected: selected)
+            } else {
+              ContactPicker(selected: selected)
+            }
           }
       } else {
         ContentUnavailableView(
           "Card unavailable", systemImage: "lock",
-          description: Text("You no longer have access to this card."))
+          description: Text(
+            session.desk.book.unavailablePeople.contains(id)
+              ? "This card couldn’t be read. Refresh People to try again."
+              : "You no longer have access to this card."))
       }
     }.background(Color.paper).navigationBarTitleDisplayMode(.inline)
+  }
+  private func chooseContact() {
+    Task {
+      do {
+        try await session.contacts.authorize()
+        pick = true
+      } catch { session.desk.problem = error.localizedDescription }
+    }
+  }
+}
+
+private struct PermittedContactPicker: View {
+  let selected: (String?) -> Void
+  @State private var permitted: [AddressBook.ContactChoice] = []
+  @State private var grant = false
+  @State private var problem: String?
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          Button("Manage allowed contacts", systemImage: "person.badge.plus") { grant = true }
+        } footer: {
+          Text("Allow Kinpost to update a contact, then choose it below to link this card.")
+        }
+        Section("Allowed contacts") {
+          if let problem {
+            Text(problem)
+          } else if permitted.isEmpty {
+            Text("No contacts allowed yet.").foregroundStyle(.secondary)
+          }
+          ForEach(permitted, id: \.id) { person in
+            Button {
+              selected(person.id)
+            } label: {
+              VStack(alignment: .leading) {
+                Text(person.name)
+                if let phone = person.phone {
+                  Text(phone).font(.caption).foregroundStyle(.secondary)
+                }
+              }
+            }
+          }
+        }
+      }.navigationTitle("Choose contact").toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { selected(nil) } }
+      }.task { await load() }.contactAccessPicker(isPresented: $grant) { @Sendable _ in
+        Task { @MainActor in await load() }
+      }
+    }
+  }
+  private func load() async {
+    do {
+      permitted = try await AddressBook.permittedContacts()
+      problem = nil
+    } catch {
+      permitted = []
+      problem = error.localizedDescription
+    }
   }
 }
 
@@ -143,7 +222,10 @@ struct AccessView: View {
               decision = a
             } label: {
               HStack {
-                DetailLine(icon: a.audience.symbol, label: a.audience.title, value: a.name)
+                DetailLine(
+                  icon: a.audience.symbol, label: a.audience.title,
+                  value: [a.name, a.handle ?? (a.pending ? "Account details unavailable" : nil)]
+                    .compactMap { $0 }.joined(separator: "\n"))
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
               }.contentShape(Rectangle())
             }.buttonStyle(.plain)
@@ -155,14 +237,16 @@ struct AccessView: View {
     }.scrollContentBackground(.hidden).background(Color.paper).navigationTitle("Access").refreshable
     { await session.refresh() }
     .confirmationDialog(
-      decision.map { "\($0.name) · \($0.audience.title)" } ?? "Card access",
+      decision.map {
+        [$0.name, $0.handle, $0.audience.title].compactMap { $0 }.joined(separator: " · ")
+      } ?? "Card access",
       isPresented: Binding(get: { decision != nil }, set: { if !$0 { decision = nil } }),
       titleVisibility: .visible, presenting: decision
     ) { a in
       if a.pending {
         Button("Approve \(a.audience.title.lowercased()) access") {
           Task { await session.desk.decide(a, allow: true) }
-        }
+        }.disabled(a.handle == nil)
       }
       Button(a.pending ? "Decline request" : "Revoke access", role: .destructive) {
         Task { await session.desk.decide(a, allow: false) }

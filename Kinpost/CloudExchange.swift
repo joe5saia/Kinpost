@@ -25,7 +25,7 @@ import KinpostCore
       saving: records, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
     for result in results.saveResults.values { _ = try result.get() }
   }
-  private func card(_ record: CKRecord) throws -> Card {
+  private static func card(_ record: CKRecord) throws -> Card {
     guard let data = record.encryptedValues["payload"] as? Data else {
       throw BookError.message("This card could not be read.")
     }
@@ -39,12 +39,15 @@ import KinpostCore
     r.participantLookupInfo.userRecordID?.recordName ?? r.participantLookupInfo.emailAddress ?? r
       .participantLookupInfo.phoneNumber ?? ""
   }
+  private func handle(_ info: CKUserIdentity.LookupInfo?) -> String? {
+    [info?.emailAddress, info?.phoneNumber].compactMap { $0 }.first { !$0.isEmpty }
+  }
   private func label(_ who: CKUserIdentity) -> String {
     if let n = who.nameComponents {
       let name = PersonNameComponentsFormatter().string(from: n)
       if !name.isEmpty { return name }
     }
-    return who.lookupInfo?.emailAddress ?? who.lookupInfo?.phoneNumber ?? "iCloud participant"
+    return "iCloud participant"
   }
 
   func read() async throws -> Book {
@@ -57,7 +60,8 @@ import KinpostCore
     if !subscribed {
       do {
         for database in [db, container.sharedCloudDatabase] {
-          let sub = CKDatabaseSubscription(subscriptionID: "kinpost-changes-\(database.databaseScope.rawValue)-v1")
+          let sub = CKDatabaseSubscription(
+            subscriptionID: "kinpost-changes-\(database.databaseScope.rawValue)-v1")
           let info = CKSubscription.NotificationInfo()
           info.shouldSendContentAvailable = true
           sub.notificationInfo = info
@@ -68,45 +72,75 @@ import KinpostCore
     }
     let master = try await fetch(id("master"))
     var book = Book(
-      owner: user.recordName, card: try master.map(card) ?? Card(),
+      owner: user.recordName, card: try master.map(Self.card) ?? Card(),
       revision: master?.recordChangeTag ?? "")
     for tier in Audience.allCases {
       guard let s = try await share(tier) else { continue }
       book.access += s.requesters.map {
-        Access(key: key($0), name: label($0.userIdentity), audience: tier, pending: true)
+        Access(
+          key: key($0), name: label($0.userIdentity), handle: handle($0.participantLookupInfo),
+          audience: tier, pending: true)
       }
       book.access += s.participants.filter { $0.role != .owner }.map {
-        Access(key: $0.participantID, name: label($0.userIdentity), audience: tier, pending: false)
+        Access(
+          key: $0.participantID, name: label($0.userIdentity),
+          handle: handle($0.userIdentity.lookupInfo), audience: tier, pending: false)
       }
     }
     let shared = container.sharedCloudDatabase
-    var incoming: [String: Connection] = [:]
     for zone in try await shared.allRecordZones()
     where zone.zoneID.zoneName == self.zone.zoneID.zoneName {
-      var token: CKServerChangeToken?
-      var more = true
-      while more {
-        let page = try await shared.recordZoneChanges(inZoneWith: zone.zoneID, since: token)
-        for result in page.modificationResultsByID.values {
-          let record = try result.get().record
-          guard record.recordType == "Edition",
-            let tier = Audience(rawValue: record.recordID.recordName), let ref = record.share,
-            incoming[zone.zoneID.ownerName].map({ $0.audience.index <= tier.index }) ?? true,
-            let s = try await shared.record(for: ref.recordID) as? CKShare, let url = s.url
-          else { continue }
-          incoming[zone.zoneID.ownerName] = Connection(
-            id: zone.zoneID.ownerName, card: try card(record).visible(to: tier), audience: tier,
-            url: url)
+      var editions: [Audience: Result<CKRecord, Error>] = [:]
+      do {
+        var token: CKServerChangeToken?
+        var more = true
+        while more {
+          let page = try await shared.recordZoneChanges(inZoneWith: zone.zoneID, since: token)
+          for (id, result) in page.modificationResultsByID {
+            if let tier = Audience(rawValue: id.recordName) {
+              editions[tier] = result.map(\.record)
+            }
+          }
+          for deletion in page.deletions {
+            if let tier = Audience(rawValue: deletion.recordID.recordName) { editions[tier] = nil }
+          }
+          more = page.moreComing
+          token = page.changeToken
         }
-        more = page.moreComing
-        token = page.changeToken
+      } catch let error as CKError
+        where [.zoneNotFound, .userDeletedZone, .permissionFailure].contains(error.code)
+      {
+        book.unavailablePeople.insert(zone.zoneID.ownerName)
+        continue
+      }
+      await Self.receive(editions, from: zone.zoneID.ownerName, into: &book) { record in
+        guard let ref = record.share else { return nil }
+        return (try await shared.record(for: ref.recordID) as? CKShare)?.url
       }
     }
-    book.people = incoming.values.sorted {
+    book.people.sort {
       $0.card.name.localizedCaseInsensitiveCompare($1.card.name) == .orderedAscending
     }
     try await verifyAccount()
     return book
+  }
+
+  static func receive(
+    _ editions: [Audience: Result<CKRecord, Error>], from owner: String, into book: inout Book,
+    shareURL: (CKRecord) async throws -> URL?
+  ) async {
+    // An unreadable broad edition is not a downgrade. Never apply a partial card to Contacts.
+    guard let tier = Audience.allCases.reversed().first(where: { editions[$0] != nil }),
+      let result = editions[tier]
+    else { return }
+    do {
+      let record = try result.get()
+      guard record.recordType == "Edition", let url = try await shareURL(record) else {
+        throw BookError.message("Missing shared edition.")
+      }
+      book.people.append(
+        Connection(id: owner, card: try card(record).visible(to: tier), audience: tier, url: url))
+    } catch { book.unavailablePeople.insert(owner) }
   }
 
   func save(_ card: Card, basedOn revision: String) async throws {
@@ -175,9 +209,15 @@ import KinpostCore
     guard let s = try await share(access.audience) else {
       throw BookError.message("This invitation is no longer available.")
     }
-    if access.pending, let r = s.requesters.first(where: { key($0) == access.key }) {
+    if access.pending, !access.key.isEmpty,
+      let r = s.requesters.first(where: { key($0) == access.key })
+    {
       if allow {
         let info = r.participantLookupInfo
+        guard let current = handle(info), current == access.handle else {
+          throw BookError.message(
+            "The requester’s email or phone is unavailable or changed. Refresh before approving.")
+        }
         guard let participant = try await container.shareParticipants(for: [info])[info]?.get()
         else { throw BookError.message("The requester’s account is unavailable.") }
         participant.permission = .readOnly
