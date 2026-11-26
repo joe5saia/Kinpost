@@ -1,0 +1,19 @@
+name: Set up Kinpost
+description: Installs the pinned Swift toolchain with .agents/setup, as in an orb, and puts it on PATH.
+
+runs:
+  using: composite
+  steps:
+    # The job runs in a bare Debian container as root. .agents/setup expects the
+    # tools an orb already has: sudo, curl and gpg to verify the Swift download.
+    - shell: bash
+      run: |
+        apt-get -qq update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          ca-certificates curl gpg sudo
+    - shell: bash
+      run: bash .agents/setup
+    # .agents/setup puts the toolchain on PATH in the login profile; read it from
+    # there so the Swift version stays written only in .agents/setup.
+    - shell: bash
+      run: bash -lc 'dirname "$(command -v swift)"' >> "$GITHUB_PATH"

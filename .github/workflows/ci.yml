@@ -1,0 +1,33 @@
+# Changes go straight to main. A push to main and every pull request, which only
+# Dependabot opens, run the headless checks. Kinpost does not deploy: builds for
+# TestFlight and the App Store are uploaded by hand (README, "Use real Apple
+# accounts"), so this workflow has the check job only.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One run per branch at a time. A newer pull request run cancels the older one;
+# a run on main is never cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Builds KinpostCore and the kinpost CLI and drives the README's sample
+  # exchange. .agents/setup supports only Debian, so the job runs in Debian 13,
+  # the release orbs use. The iPhone app needs Xcode and is not built here.
+  check:
+    runs-on: ubuntu-latest
+    container: debian:13
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Debian has no git, so checkout downloads a tarball; the scripts run
+      # through bash rather than depending on their file mode.
+      - uses: ./.github/actions/setup
+      - run: bash .agents/check

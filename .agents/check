@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# The headless checks that CI runs on every push and pull request. Kinpost has no
+# unit-test target, so this builds the Swift package and drives the README's
+# sample exchange through the kinpost CLI. Run it after .agents/setup, in a login
+# shell or with the toolchain on PATH. It does not build the iPhone app: that
+# needs Xcode on a Mac (README, "Try it on one simulator").
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+swift build
+
+# README, "Drive the same behavior without an iPhone": Mira asks for Avery's
+# Phone only card, sees it after approval with the new number, and loses it on
+# revocation; Theo's request is denied.
+out=$(.build/debug/kinpost <<'EOF'
+invite phone
+as mira
+request
+ls
+as avery
+access
+approve mira:phone
+number 415-555-0199
+as mira
+request
+view avery
+as theo
+request
+as avery
+deny theo:phone
+revoke mira:phone
+as mira
+ls
+EOF
+)
+printf '%s\n' "$out"
+
+fail() { echo "CLI smoke check failed: $1" >&2; exit 1; }
+if grep -q '^Error:' <<<"$out"; then fail 'a command reported an error'; fi
+view=$(grep '^{' <<<"$out") || fail 'view avery printed no card'
+grep -q '"number":"415-555-0199"' <<<"$view" || fail 'the approved card lacks the new number'
+grep -q '"street":""' <<<"$view" || fail 'the Phone only card shows a street address'
+[[ $(grep -c '^mira: .*people=0' <<<"$out") == 2 ]] ||
+  fail 'Mira should see no cards before approval and after revocation'
+echo 'CLI smoke check passed'

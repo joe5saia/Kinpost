@@ -1,0 +1,37 @@
+# Weekly version updates for every ecosystem in the repository. Minor and patch
+# updates of an ecosystem arrive together in one pull request; each major update
+# gets its own. Opening one starts an Amp orb that reviews, fixes and lands it
+# (.agents/skills/reviewing-dependency-updates/SKILL.md).
+version: 2
+
+updates:
+  # Package.swift. Kinpost has no package dependencies today, so this entry
+  # opens nothing until one is added; the Xcode project uses only the local
+  # package. The Swift toolchain itself is pinned in .agents/setup, which
+  # Dependabot does not read.
+  - package-ecosystem: swift
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
+    # SwiftPM has no minimum release age, so the cooldown is the only delay
+    # before a new release reaches Package.resolved.
+    cooldown:
+      default-days: 3
+    groups:
+      non-major:
+        update-types: [minor, patch]
+
+  # The CI workflow and the composite setup action, pinned to commit SHAs.
+  - package-ecosystem: github-actions
+    directories: [/, /.github/actions/*]
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
+    groups:
+      non-major:
+        update-types: [minor, patch]
